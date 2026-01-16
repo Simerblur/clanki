@@ -21,6 +21,9 @@ An MCP server that enables AI assistants like Claude to interact with Anki flash
 - Add and manage tags
 - View deck contents and card information
 - Full integration with AnkiConnect
+- **Robust error handling** with helpful suggestions and auto-recovery
+- **Auto-create missing decks** - no need to create decks manually
+- **Duplicate-safe operations** - creating existing note types won't crash
 
 ## Prerequisites
 
@@ -249,6 +252,43 @@ To modify or extend the server:
 1. Make changes to `src/index.ts`
 2. Rebuild with `npm run build`
 3. Debug with `npx @modelcontextprotocol/inspector node build/index.js`
+
+## Troubleshooting
+
+### Server won't start or operations fail
+
+**Symptoms:** Error messages about AnkiConnect not responding
+
+**Solution:**
+1. Make sure Anki is running
+2. Verify AnkiConnect plugin is installed: Tools → Add-ons → AnkiConnect
+3. Test AnkiConnect by visiting http://localhost:8765 in your browser
+4. Restart Anki if needed
+
+### "Note type already exists" errors
+
+**Fixed in v2.0:** The server now automatically detects existing note types and uses them instead of crashing.
+
+### Cards not appearing in decks
+
+**Possible causes:**
+- Deck name mismatch (check spelling/capitalization)
+- Anki sync conflicts
+- Fields don't match note type definition
+
+**Solution:**
+- The server now auto-creates decks if they don't exist
+- Check Anki to verify the deck was created
+- Sync your Anki collection if using AnkiWeb
+
+### Connection errors
+
+The server performs health checks on startup. If you see warnings:
+```
+WARNING: AnkiConnect is not responding
+```
+
+This means Anki isn't running or AnkiConnect isn't active. The server will still start but operations will fail until you start Anki.
 
 ## License
 
