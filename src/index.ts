@@ -268,6 +268,149 @@ function buildMediaArray(
   }).filter((item): item is MediaItem => item !== null);
 }
 
+// Helper function to ensure note type exists (create if missing)
+async function ensureNoteType(
+  modelName: string,
+  fields: string[],
+  templates: any[],
+  css?: string
+): Promise<{ exists: boolean; created: boolean }> {
+  try {
+    // Get all existing model names
+    const existingModels = await ankiRequest<string[]>("modelNames", {});
+
+    if (existingModels.includes(modelName)) {
+      console.error(`Note type "${modelName}" already exists, skipping creation`);
+      return { exists: true, created: false };
+    }
+
+    // Create the model
+    await ankiRequest("createModel", {
+      modelName,
+      inOrderFields: fields,
+      cardTemplates: templates,
+      css: css || ".card { font-family: arial; font-size: 20px; text-align: center; color: black; background-color: white; }",
+    });
+
+    console.error(`Created note type "${modelName}"`);
+    return { exists: true, created: true };
+  } catch (error) {
+    console.error(`Failed to ensure note type "${modelName}":`, error);
+    throw error;
+  }
+}
+
+// Helper function to ensure deck exists (create if missing)
+async function ensureDeck(deckName: string): Promise<{ exists: boolean; created: boolean }> {
+  try {
+    // Get all deck names
+    const existingDecks = await ankiRequest<string[]>("deckNames", {});
+
+    if (existingDecks.includes(deckName)) {
+      console.error(`Deck "${deckName}" already exists`);
+      return { exists: true, created: false };
+    }
+
+    // Create the deck
+    await ankiRequest("createDeck", { deck: deckName });
+    console.error(`Created deck "${deckName}"`);
+    return { exists: true, created: true };
+  } catch (error) {
+    console.error(`Failed to ensure deck "${deckName}":`, error);
+    throw error;
+  }
+}
+
+// Helper function to check AnkiConnect health
+async function checkAnkiConnectHealth(): Promise<{ healthy: boolean; message?: string }> {
+  try {
+    // Try to ping AnkiConnect
+    await ankiRequest("version", {});
+    return { healthy: true };
+  } catch (error) {
+    return {
+      healthy: false,
+      message: `Cannot connect to AnkiConnect. Please ensure:
+1. Anki is running
+2. AnkiConnect plugin is installed
+3. You can access http://localhost:8765
+
+Error: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+// Helper interface and function for structured error responses
+interface StructuredError {
+  type: 'validation' | 'connection' | 'anki' | 'duplicate' | 'not_found' | 'unknown';
+  message: string;
+  suggestion?: string;
+  details?: any;
+}
+
+function formatErrorResponse(error: unknown): { content: { type: string; text: string }[] } {
+  let structuredError: StructuredError;
+
+  if (error instanceof z.ZodError) {
+    structuredError = {
+      type: 'validation',
+      message: `Invalid input: ${error.errors.map((e) => `${e.path.join(".")}: ${e.message}`).join(", ")}`,
+      suggestion: 'Please check your input parameters and try again.',
+    };
+  } else if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+
+    if (message.includes('cannot connect') || message.includes('ankiconnect')) {
+      structuredError = {
+        type: 'connection',
+        message: error.message,
+        suggestion: `Please verify:
+1. Anki is running
+2. AnkiConnect plugin is active
+3. Visit http://localhost:8765 to test the connection`,
+      };
+    } else if (message.includes('already exists') || message.includes('duplicate')) {
+      structuredError = {
+        type: 'duplicate',
+        message: error.message,
+        suggestion: 'The item already exists. This is usually fine - continuing to use the existing one.',
+      };
+    } else if (message.includes('not found') || message.includes('does not exist')) {
+      structuredError = {
+        type: 'not_found',
+        message: error.message,
+        suggestion: 'The requested item was not found. It may have been deleted or the name may be incorrect.',
+      };
+    } else {
+      structuredError = {
+        type: 'anki',
+        message: error.message,
+        suggestion: 'An error occurred in Anki. Check the Anki application for more details.',
+      };
+    }
+  } else {
+    structuredError = {
+      type: 'unknown',
+      message: String(error),
+      suggestion: 'An unexpected error occurred. Please try again.',
+    };
+  }
+
+  let responseText = `❌ Error: ${structuredError.message}`;
+  if (structuredError.suggestion) {
+    responseText += `\n\n💡 Suggestion: ${structuredError.suggestion}`;
+  }
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: responseText,
+      },
+    ],
+  };
+}
+
 async function main() {
   // Create server instance
   const server = new Server(
@@ -637,6 +780,9 @@ async function main() {
         const actualModelName = modelName || "Basic";
         const actualFields = fields || { Front: front, Back: back };
 
+        // Ensure deck exists
+        await ensureDeck(deckName);
+
         // Build picture and audio arrays for AnkiConnect
         // For custom models, we need to use the field names from the fields object
         let picture: any[] = [];
@@ -753,6 +899,9 @@ async function main() {
           );
         }
 
+        // Ensure deck exists
+        await ensureDeck(deckName);
+
         // Build picture and audio arrays for AnkiConnect
         const picture = [
           ...buildMediaArray(textImages, "Text", "image"),
@@ -864,21 +1013,27 @@ async function main() {
         const { name: modelName, fields, templates, css } =
           CreateNoteTypeArgumentsSchema.parse(args);
 
-        await ankiRequest("createModel", {
-          modelName,
-          inOrderFields: fields,
-          cardTemplates: templates,
-          css: css || ".card { font-family: arial; font-size: 20px; text-align: center; color: black; background-color: white; }",
-        });
+        const result = await ensureNoteType(modelName, fields, templates, css);
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Successfully created note type "${modelName}" with fields: ${fields.join(", ")}`,
-            },
-          ],
-        };
+        if (result.created) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Successfully created note type "${modelName}" with fields: ${fields.join(", ")}`,
+              },
+            ],
+          };
+        } else {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Note type "${modelName}" already exists. Using existing note type.`,
+              },
+            ],
+          };
+        }
       }
 
       if (name === "search-notes") {
@@ -984,6 +1139,9 @@ async function main() {
 
         const primaryValue = fields[primaryField];
 
+        // Ensure deck exists
+        await ensureDeck(deckName);
+
         // Search for existing note by primary field value
         const query = `deck:"${deckName}" ${primaryField}:"${primaryValue}"`;
         const existingNoteIds = await ankiRequest<number[]>("findNotes", { query });
@@ -1040,14 +1198,8 @@ async function main() {
 
       throw new Error(`Unknown tool: ${name}`);
     } catch (error) {
-      if (error instanceof z.ZodError) {
-        throw new Error(
-          `Invalid arguments: ${error.errors
-            .map((e) => `${e.path.join(".")}: ${e.message}`)
-            .join(", ")}`
-        );
-      }
-      throw error;
+      console.error(`Error executing tool "${name}":`, error);
+      return formatErrorResponse(error);
     }
   });
 
@@ -1199,6 +1351,17 @@ async function main() {
       );
     }
   });
+
+  // Check AnkiConnect health on startup
+  console.error("Checking AnkiConnect connection...");
+  const health = await checkAnkiConnectHealth();
+  if (!health.healthy) {
+    console.error("WARNING: AnkiConnect is not responding:");
+    console.error(health.message);
+    console.error("Server will start, but operations will fail until Anki is running.");
+  } else {
+    console.error("AnkiConnect connection: OK");
+  }
 
   // Start the server
   const transport = new StdioServerTransport();
