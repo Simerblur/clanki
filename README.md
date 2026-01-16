@@ -8,11 +8,16 @@ An MCP server that enables AI assistants like Claude to interact with Anki flash
 ## Features
 
 - Create and manage Anki decks
+- **Create custom note types** with arbitrary fields, templates, and styling
 - Create basic flashcards with front/back content
 - Create cloze deletion cards
+- **Create cards with custom note types** - support for any field structure
+- **Atomic upsert operations** - create or update notes in a single operation
 - **Attach images and audio from URLs** - automatically downloaded and embedded
 - HTML formatting support in card fields
 - Update existing cards and cloze deletions
+- **Search notes** using Anki's powerful query syntax
+- **Find duplicates** to avoid creating redundant cards
 - Add and manage tags
 - View deck contents and card information
 - Full integration with AnkiConnect
@@ -72,14 +77,39 @@ Creates a new Anki deck
 - Parameters:
   - `name`: Name for the new deck
 
+### create-note-type
+
+Creates a custom Anki note type (model) with custom fields, card templates, and styling.
+
+- Parameters:
+  - `name`: Name for the new note type (must be unique)
+  - `fields`: Array of field names (e.g., `["Hanzi", "Pinyin", "English", "Sentence", "Notes"]`)
+  - `templates`: Array of card templates with `name`, `qfmt` (question format), and `afmt` (answer format)
+  - `css`: (Optional) CSS styling for the cards
+
+### upsert-note
+
+**Recommended for creating cards.** Atomically finds a note by a primary field value; updates it if found, or creates it if missing. This prevents duplicates and is faster than separate search + create operations.
+
+- Parameters:
+  - `deckName`: Name of the deck to add/update the note in
+  - `modelName`: Name of the note type/model to use (e.g., `"Basic"`, `"Cloze"`, or custom note type)
+  - `fields`: Key-value pairs of field data (e.g., `{"Hanzi": "马上", "Pinyin": "mǎshàng", "English": "immediately"}`)
+  - `primaryField`: The field name to check for duplicates (e.g., `"Hanzi"`, `"Front"`)
+  - `tags`: (Optional) Array of tags for the note
+
 ### create-card
 
-Creates a new basic flashcard in a specified deck. Supports HTML formatting and media attachments.
+Creates a new basic flashcard in a specified deck. Supports both Basic cards (front/back) and custom note types with arbitrary fields. Supports HTML formatting and media attachments.
 
 - Parameters:
   - `deckName`: Name of the deck to add the card to
-  - `front`: Front side content of the card (supports HTML)
-  - `back`: Back side content of the card (supports HTML)
+  - **For Basic cards:**
+    - `front`: Front side content of the card (supports HTML)
+    - `back`: Back side content of the card (supports HTML)
+  - **For custom note types:**
+    - `modelName`: Name of the note type/model to use
+    - `fields`: Key-value pairs of custom fields (e.g., `{"Hanzi": "马上", "Pinyin": "mǎshàng"}`)
   - `tags`: (Optional) Array of tags for the card
   - `frontImages`: (Optional) Array of image URLs for the front
   - `backImages`: (Optional) Array of image URLs for the back
@@ -120,11 +150,63 @@ Updates an existing cloze deletion card
   - `backExtra`: (Optional) New extra information for the back
   - `tags`: (Optional) New tags for the card
 
+### search-notes
+
+Search for notes using Anki's query syntax. Returns note IDs matching the query.
+
+- Parameters:
+  - `query`: Anki search query (e.g., `"deck:Spanish tag:verb"`, `"Hanzi:马上"`, `"tag:HSK3"`)
+
+### get-note-info
+
+Get detailed information about specific notes by their IDs. Returns all fields, tags, model name, and metadata.
+
+- Parameters:
+  - `noteIds`: Array of note IDs to retrieve information for
+
+### find-duplicates
+
+Find existing notes in a deck that contain similar text. Useful for checking if a card already exists before creating a new one.
+
+- Parameters:
+  - `deckName`: Name of the deck to search in
+  - `text`: Text to search for in existing notes
+  - `searchIn`: (Optional) Where to search: `"front"`, `"back"`, or `"any"` (default: `"any"`)
+
 ## Usage Examples
+
+### Creating a custom note type for Chinese vocabulary
+
+```
+"Create a note type called 'Chinese Vocabulary' with fields: Hanzi, Pinyin, English, Sentence, and Notes"
+```
+
+### Using upsert-note (recommended for preventing duplicates)
+
+```
+"Add a Chinese flashcard for '马上' (mǎshàng) meaning 'immediately' to my HSK3 deck.
+Use the Chinese Vocabulary note type and include an example sentence."
+```
+
+This will:
+- Check if a card with Hanzi "马上" already exists in the deck
+- If it exists: update the existing card
+- If it doesn't exist: create a new card
+- No duplicates are created!
 
 ### Basic card with text only
 ```
 "Create a flashcard in my Spanish deck with 'Hola' on the front and 'Hello' on the back"
+```
+
+### Custom note type card
+```
+"Create a card in my Chinese deck using the Chinese Vocabulary model with:
+- Hanzi: 洗手间
+- Pinyin: xǐshǒujiān
+- English: restroom
+- Sentence: 请问，洗手间在哪里？
+- Notes: Literal meaning is 'wash-hand-room'"
 ```
 
 ### Card with images
@@ -145,6 +227,17 @@ Updates an existing cloze deletion card
 ### Cloze card with media
 ```
 "Create a cloze card: 'The capital of {{c1::France}} is {{c2::Paris}}' with an image of the Eiffel Tower"
+```
+
+### Searching for notes
+```
+"Search for all cards in my Spanish deck tagged with 'verb'"
+"Find all cards with the word '马上' in my Chinese deck"
+```
+
+### Finding duplicates before creating
+```
+"Check if there's already a card for 'Hola' in my Spanish deck"
 ```
 
 **Note:** Media files are automatically downloaded from URLs and embedded into the cards. Ensure URLs are accessible and point to valid media files.

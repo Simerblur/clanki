@@ -43,13 +43,15 @@ const CreateDeckArgumentsSchema = z.object({
 
 const CreateCardArgumentsSchema = z.object({
   deckName: z.string(),
-  front: z.string(),
-  back: z.string(),
+  front: z.string().optional(),
+  back: z.string().optional(),
   tags: z.array(z.string()).optional(),
   frontImages: z.array(z.string()).optional(),
   backImages: z.array(z.string()).optional(),
   frontAudio: z.array(z.string()).optional(),
   backAudio: z.array(z.string()).optional(),
+  modelName: z.string().optional(),
+  fields: z.record(z.string()).optional(),
 });
 
 const CreateClozeCardArgumentsSchema = z.object({
@@ -75,6 +77,41 @@ const UpdateClozeCardArgumentsSchema = z.object({
   text: z.string().optional(),
   backExtra: z.string().optional(),
   tags: z.array(z.string()).optional(),
+});
+
+const CreateNoteTypeArgumentsSchema = z.object({
+  name: z.string().min(1),
+  fields: z.array(z.string()).min(1),
+  templates: z.array(
+    z.object({
+      name: z.string(),
+      qfmt: z.string(),
+      afmt: z.string(),
+    })
+  ).min(1),
+  css: z.string().optional(),
+});
+
+const UpsertNoteArgumentsSchema = z.object({
+  deckName: z.string(),
+  modelName: z.string(),
+  fields: z.record(z.string()),
+  primaryField: z.string(),
+  tags: z.array(z.string()).optional(),
+});
+
+const SearchNotesArgumentsSchema = z.object({
+  query: z.string(),
+});
+
+const GetNoteInfoArgumentsSchema = z.object({
+  noteIds: z.array(z.number()),
+});
+
+const FindDuplicatesArgumentsSchema = z.object({
+  deckName: z.string(),
+  text: z.string(),
+  searchIn: z.enum(["front", "back", "any"]).optional(),
 });
 
 // Helper function for making AnkiConnect requests with retries
@@ -267,7 +304,7 @@ async function main() {
 
         {
           name: "create-card",
-          description: "Create a new flashcard in a specified deck. Supports HTML formatting in text fields. You can attach multiple images and audio files from URLs - they will be automatically downloaded and embedded in the card.",
+          description: "Create a new flashcard in a specified deck. Supports both Basic cards (front/back) and custom note types with arbitrary fields. Supports HTML formatting in text fields. You can attach multiple images and audio files from URLs - they will be automatically downloaded and embedded in the card.",
           inputSchema: {
             type: "object",
             properties: {
@@ -277,11 +314,11 @@ async function main() {
               },
               front: {
                 type: "string",
-                description: "Front side content of the card (supports HTML formatting)",
+                description: "Front side content of the card (supports HTML formatting). Use this with 'back' for Basic note type. Cannot be used with 'fields'.",
               },
               back: {
                 type: "string",
-                description: "Back side content of the card (supports HTML formatting)",
+                description: "Back side content of the card (supports HTML formatting). Use this with 'front' for Basic note type. Cannot be used with 'fields'.",
               },
               tags: {
                 type: "array",
@@ -308,8 +345,16 @@ async function main() {
                 items: { type: "string" },
                 description: "Optional array of audio file URLs to attach to the back of the card. Audio will be downloaded and can be played in Anki.",
               },
+              modelName: {
+                type: "string",
+                description: "Optional name of the note type/model to use (defaults to 'Basic'). Required when using 'fields' parameter. Use this to create cards with custom note types.",
+              },
+              fields: {
+                type: "object",
+                description: "Custom fields as key-value pairs for custom note types (e.g., {\"Hanzi\": \"马上\", \"Pinyin\": \"mǎshàng\", \"English\": \"immediately\"}). Use this instead of 'front' and 'back' when using custom note types. Requires 'modelName' to be specified.",
+              },
             },
-            required: ["deckName", "front", "back"],
+            required: ["deckName"],
           },
         },
         {
@@ -418,6 +463,125 @@ async function main() {
             required: ["noteId"],
           },
         },
+        {
+          name: "create-note-type",
+          description: "Create a custom Anki note type (model) with custom fields, card templates, and styling. This allows you to create specialized card types beyond the default Basic and Cloze types.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+                description: "Name for the new note type (must be unique)",
+              },
+              fields: {
+                type: "array",
+                items: { type: "string" },
+                description: "Array of field names for the note type (e.g., ['Front', 'Back', 'Example'])",
+              },
+              templates: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    name: { type: "string" },
+                    qfmt: { type: "string" },
+                    afmt: { type: "string" },
+                  },
+                  required: ["name", "qfmt", "afmt"],
+                },
+                description: "Array of card templates. Each template has: name (template name), qfmt (question/front format using {{FieldName}} syntax), afmt (answer/back format using {{FieldName}} and {{FrontSide}} syntax)",
+              },
+              css: {
+                type: "string",
+                description: "Optional CSS styling for the cards (default: '.card { text-align: center; }')",
+              },
+            },
+            required: ["name", "fields", "templates"],
+          },
+        },
+        {
+          name: "search-notes",
+          description: "Search for notes using Anki's query syntax. Useful for finding existing cards before creating new ones, searching by tags, content, or other criteria. Returns note IDs and basic information.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              query: {
+                type: "string",
+                description: "Anki search query. Examples: 'deck:Spanish tag:verb', 'front:hola', 'tag:HSK3', '\"马上\"' (exact phrase), 'deck:\"Chinese HSK\" Hanzi:马上'. See Anki documentation for full query syntax.",
+              },
+            },
+            required: ["query"],
+          },
+        },
+        {
+          name: "get-note-info",
+          description: "Get detailed information about specific notes by their IDs. Returns all fields, tags, model name, and other metadata. Use this after search-notes to get full details about found notes.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              noteIds: {
+                type: "array",
+                items: { type: "number" },
+                description: "Array of note IDs to retrieve information for",
+              },
+            },
+            required: ["noteIds"],
+          },
+        },
+        {
+          name: "find-duplicates",
+          description: "Find existing notes in a deck that contain similar text. Useful for checking if a card already exists before creating a new one to avoid duplicates.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              deckName: {
+                type: "string",
+                description: "Name of the deck to search in",
+              },
+              text: {
+                type: "string",
+                description: "Text to search for in existing notes",
+              },
+              searchIn: {
+                type: "string",
+                enum: ["front", "back", "any"],
+                description: "Where to search for the text: 'front' (Front field only), 'back' (Back field only), or 'any' (any field). Defaults to 'any'.",
+              },
+            },
+            required: ["deckName", "text"],
+          },
+        },
+        {
+          name: "upsert-note",
+          description: "Atomically finds a note by a primary field value; updates it if found, or creates it if missing. This is the recommended way to create cards as it prevents duplicates and is faster than separate search + create operations.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              deckName: {
+                type: "string",
+                description: "Name of the deck to add/update the note in",
+              },
+              modelName: {
+                type: "string",
+                description: "Name of the note type/model to use (e.g., 'Basic', 'Cloze', or custom note type name)",
+              },
+              fields: {
+                type: "object",
+                description: "Key-value pairs of field data (e.g., {'Hanzi': '马上', 'Pinyin': 'mǎshàng', 'English': 'immediately'})",
+              },
+              primaryField: {
+                type: "string",
+                description: "The specific field name to check for duplicates (e.g., 'Hanzi', 'Front'). Must be a key in the fields object.",
+              },
+              tags: {
+                type: "array",
+                items: { type: "string" },
+                description: "Optional tags for the note",
+              },
+            },
+            required: ["deckName", "modelName", "fields", "primaryField"],
+          },
+        },
       ],
     };
   });
@@ -452,27 +616,61 @@ async function main() {
           backImages = [],
           frontAudio = [],
           backAudio = [],
+          modelName,
+          fields,
         } = CreateCardArgumentsSchema.parse(args);
 
-        // Build picture and audio arrays for AnkiConnect
-        const picture = [
-          ...buildMediaArray(frontImages, "Front", "image"),
-          ...buildMediaArray(backImages, "Back", "image"),
-        ];
+        // Validate input: either use front/back OR fields, not both
+        if (fields && (front || back)) {
+          throw new Error("Cannot use both 'fields' and 'front'/'back' parameters. Use 'fields' for custom note types or 'front'/'back' for Basic cards.");
+        }
 
-        const audio = [
-          ...buildMediaArray(frontAudio, "Front", "audio"),
-          ...buildMediaArray(backAudio, "Back", "audio"),
-        ];
+        if (fields && !modelName) {
+          throw new Error("'modelName' is required when using 'fields' parameter.");
+        }
+
+        if (!fields && (!front || !back)) {
+          throw new Error("Either provide 'front' and 'back' for Basic cards, or 'fields' and 'modelName' for custom note types.");
+        }
+
+        // Determine the model and fields to use
+        const actualModelName = modelName || "Basic";
+        const actualFields = fields || { Front: front, Back: back };
+
+        // Build picture and audio arrays for AnkiConnect
+        // For custom models, we need to use the field names from the fields object
+        let picture: any[] = [];
+        let audio: any[] = [];
+
+        if (fields) {
+          // For custom models, we don't support field-specific media yet
+          // All media goes to the first field
+          const firstField = Object.keys(fields)[0];
+          picture = [
+            ...buildMediaArray(frontImages, firstField, "image"),
+            ...buildMediaArray(backImages, firstField, "image"),
+          ];
+          audio = [
+            ...buildMediaArray(frontAudio, firstField, "audio"),
+            ...buildMediaArray(backAudio, firstField, "audio"),
+          ];
+        } else {
+          // For Basic cards, use Front/Back
+          picture = [
+            ...buildMediaArray(frontImages, "Front", "image"),
+            ...buildMediaArray(backImages, "Back", "image"),
+          ];
+          audio = [
+            ...buildMediaArray(frontAudio, "Front", "audio"),
+            ...buildMediaArray(backAudio, "Back", "audio"),
+          ];
+        }
 
         const noteParams: any = {
           note: {
             deckName,
-            modelName: "Basic",
-            fields: {
-              Front: front,
-              Back: back,
-            },
+            modelName: actualModelName,
+            fields: actualFields,
             tags,
           },
         };
@@ -496,7 +694,7 @@ async function main() {
           content: [
             {
               type: "text",
-              text: `Successfully created new card in deck "${deckName}"${mediaText}`,
+              text: `Successfully created new card in deck "${deckName}" using model "${actualModelName}"${mediaText}`,
             },
           ],
         };
@@ -633,7 +831,7 @@ async function main() {
             fields.Text = text;
           }
           if (backExtra !== undefined) {
-            fields.Back = backExtra;
+            fields["Back Extra"] = backExtra;
           }
 
           await ankiRequest("updateNoteFields", {
@@ -660,6 +858,184 @@ async function main() {
             },
           ],
         };
+      }
+
+      if (name === "create-note-type") {
+        const { name: modelName, fields, templates, css } =
+          CreateNoteTypeArgumentsSchema.parse(args);
+
+        await ankiRequest("createModel", {
+          modelName,
+          inOrderFields: fields,
+          cardTemplates: templates,
+          css: css || ".card { font-family: arial; font-size: 20px; text-align: center; color: black; background-color: white; }",
+        });
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Successfully created note type "${modelName}" with fields: ${fields.join(", ")}`,
+            },
+          ],
+        };
+      }
+
+      if (name === "search-notes") {
+        const { query } = SearchNotesArgumentsSchema.parse(args);
+
+        const noteIds = await ankiRequest<number[]>("findNotes", { query });
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Found ${noteIds.length} notes matching query "${query}".\n\nNote IDs: ${noteIds.join(", ")}`,
+            },
+          ],
+        };
+      }
+
+      if (name === "get-note-info") {
+        const { noteIds } = GetNoteInfoArgumentsSchema.parse(args);
+
+        const notesInfo = await ankiRequest<any[]>("notesInfo", {
+          notes: noteIds,
+        });
+
+        const formattedNotes = notesInfo
+          .map((note) => {
+            const fieldEntries = Object.entries(note.fields)
+              .map(([key, value]: [string, any]) => `  ${key}: ${value.value}`)
+              .join("\n");
+            return `Note ID: ${note.noteId}\nModel: ${note.modelName}\nFields:\n${fieldEntries}\nTags: ${note.tags.join(", ")}\n---`;
+          })
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Retrieved information for ${notesInfo.length} note(s):\n\n${formattedNotes}`,
+            },
+          ],
+        };
+      }
+
+      if (name === "find-duplicates") {
+        const { deckName, text, searchIn = "any" } = FindDuplicatesArgumentsSchema.parse(args);
+
+        let query = `deck:"${deckName}"`;
+
+        if (searchIn === "front") {
+          query += ` Front:*${text}*`;
+        } else if (searchIn === "back") {
+          query += ` Back:*${text}*`;
+        } else {
+          query += ` *${text}*`;
+        }
+
+        const noteIds = await ankiRequest<number[]>("findNotes", { query });
+
+        if (noteIds.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No duplicate notes found for "${text}" in deck "${deckName}".`,
+              },
+            ],
+          };
+        }
+
+        const notesInfo = await ankiRequest<any[]>("notesInfo", {
+          notes: noteIds,
+        });
+
+        const formattedNotes = notesInfo
+          .map((note) => {
+            const fieldEntries = Object.entries(note.fields)
+              .map(([key, value]: [string, any]) => `  ${key}: ${value.value}`)
+              .join("\n");
+            return `Note ID: ${note.noteId}\nModel: ${note.modelName}\nFields:\n${fieldEntries}\nTags: ${note.tags.join(", ")}\n---`;
+          })
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Found ${noteIds.length} potential duplicate(s) for "${text}" in deck "${deckName}":\n\n${formattedNotes}`,
+            },
+          ],
+        };
+      }
+
+      if (name === "upsert-note") {
+        const { deckName, modelName, fields, primaryField, tags = [] } =
+          UpsertNoteArgumentsSchema.parse(args);
+
+        // Validate that primaryField exists in fields
+        if (!(primaryField in fields)) {
+          throw new Error(
+            `Primary field "${primaryField}" not found in fields object. Available fields: ${Object.keys(fields).join(", ")}`
+          );
+        }
+
+        const primaryValue = fields[primaryField];
+
+        // Search for existing note by primary field value
+        const query = `deck:"${deckName}" ${primaryField}:"${primaryValue}"`;
+        const existingNoteIds = await ankiRequest<number[]>("findNotes", { query });
+
+        if (existingNoteIds.length > 0) {
+          // Update existing note
+          const noteId = existingNoteIds[0];
+
+          // Update fields
+          await ankiRequest("updateNoteFields", {
+            note: {
+              id: noteId,
+              fields,
+            },
+          });
+
+          // Update tags
+          await ankiRequest("replaceTags", {
+            notes: [noteId],
+            tags: tags.join(" "),
+          });
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Updated existing note ${noteId} in deck "${deckName}" (matched by ${primaryField}: "${primaryValue}")`,
+              },
+            ],
+          };
+        } else {
+          // Create new note
+          const noteParams: any = {
+            note: {
+              deckName,
+              modelName,
+              fields,
+              tags,
+            },
+          };
+
+          const noteId = await ankiRequest<number>("addNote", noteParams);
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Created new note ${noteId} in deck "${deckName}" using model "${modelName}"`,
+              },
+            ],
+          };
+        }
       }
 
       throw new Error(`Unknown tool: ${name}`);
